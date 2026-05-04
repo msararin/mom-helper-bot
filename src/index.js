@@ -87,6 +87,50 @@ async function handleLineEvent(event, env) {
     return;
   }
 
+  if (message === "ดูของในตู้") {
+    await clearUserMode(env.BOT_STATE, userId);
+    try {
+      const inventory = await fetchInventoryFromAppsScript(
+        env.GOOGLE_APPS_SCRIPT_URL
+      );
+      await replyToLine(
+        env.LINE_CHANNEL_ACCESS_TOKEN,
+        replyToken,
+        formatInventoryReply(inventory)
+      );
+    } catch (error) {
+      console.error("Inventory fetch failed:", error);
+      await replyToLine(
+        env.LINE_CHANNEL_ACCESS_TOKEN,
+        replyToken,
+        "ตอนนี้ยังดึงรายการของในตู้ไม่ได้ ขอแก้ฝั่งชีตก่อนนะ"
+      );
+    }
+    return;
+  }
+
+  if (message === "คิดเมนู") {
+    await clearUserMode(env.BOT_STATE, userId);
+    try {
+      const inventory = await fetchInventoryFromAppsScript(
+        env.GOOGLE_APPS_SCRIPT_URL
+      );
+      await replyToLine(
+        env.LINE_CHANNEL_ACCESS_TOKEN,
+        replyToken,
+        formatMenuIdeasReply(inventory)
+      );
+    } catch (error) {
+      console.error("Menu suggestion fetch failed:", error);
+      await replyToLine(
+        env.LINE_CHANNEL_ACCESS_TOKEN,
+        replyToken,
+        "ตอนนี้ยังอ่านของในตู้ไม่สำเร็จ เลยยังคิดเมนูให้ไม่ได้"
+      );
+    }
+    return;
+  }
+
   if (mode === "adding_item") {
     const items = parseThaiItems(message);
 
@@ -438,6 +482,59 @@ async function saveItemsToAppsScript(url, payload) {
   }
 }
 
+async function fetchInventoryFromAppsScript(url) {
+  if (!url) {
+    throw new Error("GOOGLE_APPS_SCRIPT_URL is not set");
+  }
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      action: "list",
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Apps Script list failed with status ${response.status}`);
+  }
+
+  const responseText = await response.text();
+  let data;
+
+  try {
+    data = JSON.parse(responseText);
+  } catch (error) {
+    throw new Error(`Apps Script list returned non-JSON: ${responseText}`);
+  }
+
+  return normalizeInventoryList(data);
+}
+
+function normalizeInventoryList(data) {
+  const rawItems = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.items)
+      ? data.items
+      : Array.isArray(data?.data)
+        ? data.data
+        : [];
+
+  return rawItems
+    .map((item) => normalizeInventoryItem(item))
+    .filter((item) => item.item);
+}
+
+function normalizeInventoryItem(item) {
+  return {
+    item: String(item?.item || item?.name || "").trim(),
+    quantity: String(item?.quantity || "").trim(),
+    unit: String(item?.unit || "").trim(),
+  };
+}
+
 function formatSavedItemsReply(items) {
   const lines = items.map((item) => {
     const details = [item.quantity, item.unit].filter(Boolean).join(" ");
@@ -445,6 +542,68 @@ function formatSavedItemsReply(items) {
   });
 
   return `บันทึกให้แล้วนะ:\n${lines.join("\n")}`;
+}
+
+function formatInventoryReply(items) {
+  if (items.length === 0) {
+    return "ตอนนี้ยังไม่มีของในตู้เลย";
+  }
+
+  const lines = items.slice(0, 20).map((item) => {
+    const details = [item.quantity, item.unit].filter(Boolean).join(" ");
+    return details ? `- ${item.item} ${details}` : `- ${item.item}`;
+  });
+
+  return `ตอนนี้มีของประมาณนี้นะ:\n${lines.join("\n")}`;
+}
+
+function formatMenuIdeasReply(items) {
+  if (items.length === 0) {
+    return "ยังไม่มีของในตู้ เลยคิดเมนูให้ไม่ค่อยได้ ลองเพิ่มของก่อนนะ";
+  }
+
+  const ideas = suggestMenuIdeas(items);
+  const lines = ideas.map((idea) => `- ${idea}`);
+  return `ลองทำเมนูพวกนี้ได้นะ:\n${lines.join("\n")}`;
+}
+
+function suggestMenuIdeas(items) {
+  const names = items.map((item) => item.item.toLowerCase());
+  const ideas = [];
+
+  if (hasAny(names, ["ไข่", "หมูสับ", "เนื้อบด", "ข้าว"])) {
+    ideas.push("ข้าวผัดง่ายๆ");
+  }
+
+  if (hasAny(names, ["ไข่"]) && hasAny(names, ["มะเขือเทศ", "ต้นหอม", "หอมใหญ่"])) {
+    ideas.push("ไข่เจียวใส่ผัก");
+  }
+
+  if (hasAny(names, ["หมูสับ", "เนื้อบด"]) && hasAny(names, ["กระเทียม", "พริก", "โหระพา"])) {
+    ideas.push("ผัดกะเพรา");
+  }
+
+  if (hasAny(names, ["เต้าหู้"]) && hasAny(names, ["ไข่", "ผักกาด", "คะน้า", "เห็ด"])) {
+    ideas.push("ต้มจืดเต้าหู้");
+  }
+
+  if (hasAny(names, ["คะน้า", "ผักคะน้า", "ผักกาด", "เห็ด"])) {
+    ideas.push("ผัดผักง่ายๆ");
+  }
+
+  if (ideas.length === 0) {
+    ideas.push("ไข่เจียว");
+    ideas.push("ผัดผักง่ายๆ");
+    ideas.push("ต้มจืดแบบบ้านๆ");
+  }
+
+  return ideas.slice(0, 3);
+}
+
+function hasAny(names, keywords) {
+  return keywords.some((keyword) =>
+    names.some((name) => name.includes(keyword))
+  );
 }
 
 async function replyToLine(channelAccessToken, replyToken, text) {
