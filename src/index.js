@@ -342,6 +342,8 @@ function parseCompactQuantityUnitToken(token) {
     };
   }
 
+  let bestMatch = null;
+
   for (let splitIndex = 1; splitIndex < token.length; splitIndex += 1) {
     const quantityText = token.slice(0, splitIndex);
     const unitText = token.slice(splitIndex);
@@ -351,13 +353,13 @@ function parseCompactQuantityUnitToken(token) {
       continue;
     }
 
-    return {
+    bestMatch = {
       quantity,
       unit: unitText,
     };
   }
 
-  return null;
+  return bestMatch;
 }
 
 function parseThaiNumberWords(text) {
@@ -661,3 +663,15 @@ function createQuickReplyButton(label) {
     },
   };
 }
+
+export {
+  handleLineEvent,
+  parseThaiItems,
+  parseThaiNumberWords,
+  looksLikeCasualChat,
+  normalizeInventoryList,
+  formatInventoryReply,
+  formatMenuIdeasReply,
+  suggestMenuIdeas,
+  getUserModeKey,
+};
