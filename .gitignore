@@ -1,0 +1,17 @@
+# dependencies
+node_modules/
+
+# env / secrets
+.env
+.env.local
+*.pem
+secrets/
+
+# build output
+dist/
+.wrangler/
+.dev.vars
+
+# system/editor
+.DS_Store
+.cursor/

@@ -1,0 +1,16 @@
+name = "mom-helper-bot"
+main = "src/index.js"
+compatibility_date = "2026-05-03"
+
+# Non-secret configuration belongs here.
+[vars]
+GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxUcbJDKAIgEQpkTaEogA9qjGdIUnrdOUOo_eNLMwHvTa74-TjgDaGFfZYlVbk0N5MpOQ/exec"
+
+# Conversation state will be stored in KV.
+# Replace these placeholder IDs after creating the namespace:
+# `wrangler kv namespace create BOT_STATE`
+# `wrangler kv namespace create BOT_STATE --preview`
+[[kv_namespaces]]
+binding = "BOT_STATE"
+id = "f8e80faaa87b4faca891353918186483"
+preview_id = "b15586db74e44868ba3b0a086ecea1cc"
