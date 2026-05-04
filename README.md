@@ -1,6 +1,6 @@
-# Maliwan
+# mom-helper-bot
 
-Maliwan is a LINE-based assistant for helping Mom decide what to buy at the market, what to cook, and what ingredients are available at home.
+Mom Helper Bot is a LINE-based assistant that helps Mom decide what to buy at the market, what to cook, and what ingredients are available at home.
 
 ## Current MVP Scope
 
