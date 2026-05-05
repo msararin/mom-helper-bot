@@ -53,6 +53,7 @@ const ALLOWED_ADMIN_SHEETS = new Set([
   "Fridge",
   "Fridge_Log",
   "Meal_Log",
+  "Household_Preferences",
 ]);
 
 const ADMIN_ROUTE_ACTIONS = {
@@ -225,10 +226,18 @@ async function handleLineEvent(event, env) {
       const menuCatalog = await fetchMenuCatalogFromAppsScript(
         env.GOOGLE_APPS_SCRIPT_URL
       );
+      let householdPreferences = [];
+      try {
+        householdPreferences = await fetchHouseholdPreferencesFromAppsScript(
+          env.GOOGLE_APPS_SCRIPT_URL
+        );
+      } catch (error) {
+        console.warn("Household preferences fetch failed, using fallback:", error);
+      }
       await replyToLine(
         env.LINE_CHANNEL_ACCESS_TOKEN,
         replyToken,
-        formatMenuIdeasReply(inventory, menuCatalog)
+        formatMenuIdeasReply(inventory, menuCatalog, householdPreferences)
       );
     } catch (error) {
       console.error("Menu suggestion fetch failed:", error);
@@ -900,6 +909,15 @@ async function fetchMenuCatalogFromAppsScript(url) {
   return normalizeMenuCatalog(data);
 }
 
+async function fetchHouseholdPreferencesFromAppsScript(url) {
+  const data = await callAppsScript(
+    url,
+    { action: "household_preferences" },
+    "Apps Script household preferences"
+  );
+  return normalizeHouseholdPreferences(data);
+}
+
 async function callAppsScript(url, payload, label = "Apps Script request") {
   if (!url) {
     throw new Error("GOOGLE_APPS_SCRIPT_URL is not set");
@@ -988,6 +1006,30 @@ function normalizeMenuCatalog(data) {
     .filter((menu) => menu.menu_name);
 }
 
+function normalizeHouseholdPreferences(data) {
+  const rawPreferences = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.preferences)
+      ? data.preferences
+      : Array.isArray(data?.items)
+        ? data.items
+        : [];
+
+  return rawPreferences
+    .map((preference) => ({
+      preference_type: String(preference?.preference_type || "").trim(),
+      keyword: String(preference?.keyword || "").trim(),
+      weight: String(preference?.weight || "").trim(),
+      enabled: String(preference?.enabled || "").trim(),
+      note: String(preference?.note || "").trim(),
+    }))
+    .filter((preference) => preference.keyword)
+    .filter((preference) => {
+      const enabled = String(preference.enabled || "").trim().toLowerCase();
+      return enabled === "" || ["yes", "y", "true", "1"].includes(enabled);
+    });
+}
+
 function formatSavedItemsReply(items) {
   const lines = items.map((item) => {
     const details = [item.quantity, item.unit].filter(Boolean).join(" ");
@@ -1010,19 +1052,23 @@ function formatInventoryReply(items) {
   return `ตอนนี้มีของประมาณนี้นะ:\n${lines.join("\n")}`;
 }
 
-function formatMenuIdeasReply(items, menuCatalog = []) {
+function formatMenuIdeasReply(items, menuCatalog = [], householdPreferences = []) {
   if (items.length === 0) {
     return "ยังไม่มีของในตู้ เลยคิดเมนูให้ไม่ค่อยได้ ลองเพิ่มของก่อนนะ";
   }
 
-  const ideas = suggestMenuIdeas(items, menuCatalog);
+  const ideas = suggestMenuIdeas(items, menuCatalog, householdPreferences);
   const lines = ideas.map((idea) => `- ${idea}`);
   return `ลองทำเมนูพวกนี้ได้นะ:\n${lines.join("\n")}`;
 }
 
-function suggestMenuIdeas(items, menuCatalog = []) {
+function suggestMenuIdeas(items, menuCatalog = [], householdPreferences = []) {
   const names = items.map((item) => item.item.toLowerCase());
-  const catalogIdeas = suggestMenuIdeasFromCatalog(items, menuCatalog);
+  const catalogIdeas = suggestMenuIdeasFromCatalog(
+    items,
+    menuCatalog,
+    householdPreferences
+  );
 
   if (catalogIdeas.length > 0) {
     return catalogIdeas;
@@ -1075,14 +1121,16 @@ function suggestMenuIdeas(items, menuCatalog = []) {
   return uniqueIdeas(ideas).slice(0, 3);
 }
 
-function suggestMenuIdeasFromCatalog(items, menuCatalog) {
+function suggestMenuIdeasFromCatalog(items, menuCatalog, householdPreferences) {
   if (!Array.isArray(menuCatalog) || menuCatalog.length === 0) {
     return [];
   }
 
   const inventoryNames = items.map((item) => item.item.toLowerCase());
   const scoredMenus = menuCatalog
-    .map((menu) => scoreMenuCandidate(menu, inventoryNames))
+    .map((menu) =>
+      scoreMenuCandidate(menu, inventoryNames, householdPreferences)
+    )
     .filter((entry) => entry.score > 0)
     .sort(compareScoredMenus);
 
@@ -1091,7 +1139,7 @@ function suggestMenuIdeasFromCatalog(items, menuCatalog) {
   );
 }
 
-function scoreMenuCandidate(menu, inventoryNames) {
+function scoreMenuCandidate(menu, inventoryNames, householdPreferences = []) {
   const requiredItems = splitCatalogList(menu.required_items);
   const optionalItems = splitCatalogList(menu.optional_items);
 
@@ -1125,6 +1173,8 @@ function scoreMenuCandidate(menu, inventoryNames) {
   if (timeMinutes > 0 && timeMinutes <= 15) {
     score += 1;
   }
+
+  score += scoreHouseholdPreferences(menu, householdPreferences);
 
   return { menu, score };
 }
@@ -1181,6 +1231,53 @@ function parseTimeMinutes(value) {
   return Number.isFinite(parsed) && parsed > 0
     ? parsed
     : Number.POSITIVE_INFINITY;
+}
+
+function scoreHouseholdPreferences(menu, householdPreferences) {
+  if (!Array.isArray(householdPreferences) || householdPreferences.length === 0) {
+    return 0;
+  }
+
+  const haystack = [
+    menu.menu_name,
+    menu.required_items,
+    menu.optional_items,
+    menu.style,
+    menu.spicy_level,
+    menu.note,
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return householdPreferences.reduce((score, preference) => {
+    const keyword = String(preference.keyword || "").trim().toLowerCase();
+    if (!keyword || !haystack.includes(keyword)) {
+      return score;
+    }
+
+    const type = String(preference.preference_type || "").trim().toLowerCase();
+    const weight = parsePreferenceWeight(preference.weight);
+
+    if (["favorite", "prefer", "like"].includes(type)) {
+      return score + weight;
+    }
+
+    if (["dislike", "avoid", "no"].includes(type)) {
+      return score - weight;
+    }
+
+    return score;
+  }, 0);
+}
+
+function parsePreferenceWeight(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return 3;
+  }
+
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
 }
 
 function hasAny(names, keywords) {
@@ -1256,6 +1353,7 @@ export {
   parseThaiNumberWords,
   looksLikeCasualChat,
   normalizeInventoryList,
+  normalizeHouseholdPreferences,
   normalizeMenuCatalog,
   normalizeUnit,
   normalizeSpokenQuantity,
@@ -1273,4 +1371,5 @@ export {
   splitCatalogList,
   containsInventoryItem,
   scoreMenuCandidate,
+  scoreHouseholdPreferences,
 };

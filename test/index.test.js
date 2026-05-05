@@ -11,6 +11,7 @@ import {
   KNOWN_UNITS,
   looksLikeCasualChat,
   normalizeInventoryList,
+  normalizeHouseholdPreferences,
   normalizeMenuCatalog,
   normalizeItemName,
   normalizeUnit,
@@ -19,6 +20,7 @@ import {
   parseThaiItems,
   parseThaiNumberWords,
   scoreMenuCandidate,
+  scoreHouseholdPreferences,
   withDefaultPurchaseDate,
 } from "../src/index.js";
 
@@ -306,6 +308,30 @@ test("normalizeMenuCatalog accepts {menus: []} payload", () => {
   );
 });
 
+test("normalizeHouseholdPreferences accepts {preferences: []} payload", () => {
+  assert.deepEqual(
+    normalizeHouseholdPreferences({
+      preferences: [
+        {
+          preference_type: "favorite",
+          keyword: "ตำปลาร้า",
+          weight: "5",
+          enabled: "yes",
+        },
+      ],
+    }),
+    [
+      {
+        preference_type: "favorite",
+        keyword: "ตำปลาร้า",
+        weight: "5",
+        enabled: "yes",
+        note: "",
+      },
+    ]
+  );
+});
+
 test("scoreMenuCandidate prefers household-friendly quick menus on ties", () => {
   const inventoryNames = ["ไข่", "เต้าหู้"];
 
@@ -333,6 +359,24 @@ test("scoreMenuCandidate prefers household-friendly quick menus on ties", () => 
         inventoryNames
       ).score
   );
+});
+
+test("scoreHouseholdPreferences boosts favorites and penalizes dislikes", () => {
+  const menu = {
+    menu_name: "ต้มจืดเต้าหู้หมูสับ",
+    required_items: "เต้าหู้,หมูสับ",
+    optional_items: "",
+    style: "เมนูน้ำ",
+    spicy_level: "mild",
+    note: "",
+  };
+
+  const prefs = [
+    { preference_type: "favorite", keyword: "เต้าหู้", weight: "4" },
+    { preference_type: "dislike", keyword: "หมูสับ", weight: "2" },
+  ];
+
+  assert.equal(scoreHouseholdPreferences(menu, prefs), 2);
 });
 
 test("default message with no mode replies with main menu", async () => {
@@ -490,6 +534,22 @@ test("คิดเมนู suggests menus from menu catalog before fallback rul
         );
       }
 
+      if (payload.action === "household_preferences") {
+        return new Response(
+          JSON.stringify({
+            preferences: [
+              {
+                preference_type: "favorite",
+                keyword: "เต้าหู้ผัดไข่",
+                weight: "5",
+                enabled: "yes",
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+
       return new Response(
         JSON.stringify({
           items: [
@@ -513,7 +573,7 @@ test("คิดเมนู suggests menus from menu catalog before fallback rul
 
   assert.equal(
     getLastReplyText(calls),
-    "ลองทำเมนูพวกนี้ได้นะ:\n- ไข่เจียวหมูสับ\n- เต้าหู้ผัดไข่\n- ต้มจืดเต้าหู้หมูสับ"
+    "ลองทำเมนูพวกนี้ได้นะ:\n- เต้าหู้ผัดไข่\n- ไข่เจียวหมูสับ\n- ต้มจืดเต้าหู้หมูสับ"
   );
 });
 

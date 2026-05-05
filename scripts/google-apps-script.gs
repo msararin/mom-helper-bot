@@ -2,6 +2,7 @@ const INVENTORY_SHEET_NAME = "Fridge";
 const LOG_SHEET_NAME = "Fridge_Log";
 const MENU_SHEET_NAME = "Menu_Catalog";
 const MEAL_LOG_SHEET_NAME = "Meal_Log";
+const PREFERENCES_SHEET_NAME = "Household_Preferences";
 const INVENTORY_HEADERS = [
   "item",
   "quantity",
@@ -34,11 +35,19 @@ const MEAL_LOG_HEADERS = [
   "source",
   "note",
 ];
+const PREFERENCES_HEADERS = [
+  "preference_type",
+  "keyword",
+  "weight",
+  "enabled",
+  "note",
+];
 const ADMIN_SHEET_HEADERS = {
   Fridge: INVENTORY_HEADERS,
   Fridge_Log: LOG_HEADERS,
   Menu_Catalog: MENU_HEADERS,
   Meal_Log: MEAL_LOG_HEADERS,
+  Household_Preferences: PREFERENCES_HEADERS,
 };
 
 function doGet(e) {
@@ -53,6 +62,12 @@ function doGet(e) {
   if (action === "menu_catalog") {
     return jsonOutput({
       menus: listMenuCatalog_(),
+    });
+  }
+
+  if (action === "household_preferences") {
+    return jsonOutput({
+      preferences: listHouseholdPreferences_(),
     });
   }
 
@@ -71,6 +86,12 @@ function doPost(e) {
   if (payload.action === "menu_catalog") {
     return jsonOutput({
       menus: listMenuCatalog_(),
+    });
+  }
+
+  if (payload.action === "household_preferences") {
+    return jsonOutput({
+      preferences: listHouseholdPreferences_(),
     });
   }
 
@@ -193,6 +214,30 @@ function listMenuCatalog_() {
     });
 }
 
+function listHouseholdPreferences_() {
+  const sheet = getHouseholdPreferencesSheet_();
+  const values = sheet.getDataRange().getValues();
+
+  if (values.length <= 1) {
+    return [];
+  }
+
+  return values
+    .slice(1)
+    .filter(function(row) {
+      return row[0] || row[1];
+    })
+    .map(function(row) {
+      return {
+        preference_type: String(row[0] || "").trim(),
+        keyword: String(row[1] || "").trim(),
+        weight: String(row[2] || "").trim(),
+        enabled: String(row[3] || "").trim(),
+        note: String(row[4] || "").trim(),
+      };
+    });
+}
+
 function getMenuSheet_() {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   return getOrCreateSheet_(spreadsheet, MENU_SHEET_NAME, MENU_HEADERS);
@@ -201,6 +246,15 @@ function getMenuSheet_() {
 function getMealLogSheet_() {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   return getOrCreateSheet_(spreadsheet, MEAL_LOG_SHEET_NAME, MEAL_LOG_HEADERS);
+}
+
+function getHouseholdPreferencesSheet_() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  return getOrCreateSheet_(
+    spreadsheet,
+    PREFERENCES_SHEET_NAME,
+    PREFERENCES_HEADERS
+  );
 }
 
 function appendLogRow_(userId, message) {
