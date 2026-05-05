@@ -658,3 +658,39 @@ test("format helpers keep user-facing Thai text stable", () => {
     "ยังไม่มีของในตู้ เลยคิดเมนูให้ไม่ค่อยได้ ลองเพิ่มของก่อนนะ"
   );
 });
+
+test("formatMenuIdeasReply does not invent fallback menus when Menu_Catalog exists but has no match", () => {
+  const reply = formatMenuIdeasReply(
+    [{ item: "ไข่", quantity: "6", unit: "ฟอง" }],
+    [
+      {
+        menu_name: "ต้มจืดเต้าหู้หมูสับ",
+        required_items: "เต้าหู้,หมูสับ",
+        optional_items: "",
+        style: "เมนูน้ำ",
+        spicy_level: "mild",
+        difficulty: "easy",
+        time_minutes: "20",
+        preferred_for_house: "yes",
+        avoid_if: "",
+        note: "",
+      },
+    ],
+    []
+  );
+
+  assert.equal(
+    reply,
+    "ตอนนี้ยังหาเมนูจากตารางที่ตรงของในตู้ไม่เจอ ลองเพิ่มเมนูใน Menu_Catalog หรือเพิ่มของในตู้ก่อนนะ"
+  );
+});
+
+test("formatMenuIdeasReply still uses legacy fallback when Menu_Catalog is empty", () => {
+  const reply = formatMenuIdeasReply(
+    [{ item: "ไข่", quantity: "6", unit: "ฟอง" }],
+    [],
+    []
+  );
+
+  assert.equal(reply, "ลองทำเมนูพวกนี้ได้นะ:\n- ไข่เจียว");
+});
