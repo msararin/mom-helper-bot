@@ -574,3 +574,91 @@ test("scenario: preferences cannot introduce out-of-catalog favorite menu", () =
     "ตอนนี้ยังหาเมนูจากตารางที่ตรงของในตู้ไม่เจอ ลองเพิ่มเมนูใน Menu_Catalog หรือเพิ่มของในตู้ก่อนนะ"
   );
 });
+
+test("scenario: dislike preference can demote a valid fried menu", () => {
+  const reply = formatMenuIdeasReply(
+    [{ item: "ไข่", quantity: "6", unit: "ฟอง" }],
+    [
+      {
+        menu_name: "ไข่ดาว",
+        required_items: "ไข่",
+        optional_items: "",
+        style: "ทอด",
+        spicy_level: "mild",
+        difficulty: "easy",
+        time_minutes: "5",
+        preferred_for_house: "yes",
+        avoid_if: "",
+        note: "",
+      },
+      {
+        menu_name: "ไข่ตุ๋น",
+        required_items: "ไข่",
+        optional_items: "",
+        style: "นึ่ง",
+        spicy_level: "mild",
+        difficulty: "easy",
+        time_minutes: "15",
+        preferred_for_house: "yes",
+        avoid_if: "",
+        note: "",
+      },
+    ],
+    [
+      {
+        preference_type: "dislike",
+        keyword: "ทอด",
+        weight: "5",
+        enabled: "yes",
+        note: "เลี่ยงของทอด",
+      },
+    ]
+  );
+
+  assert.equal(reply, "ลองทำเมนูพวกนี้ได้นะ:\n- ไข่ตุ๋น\n- ไข่ดาว");
+});
+
+test("scenario: disabled favorite preference is ignored", () => {
+  const reply = formatMenuIdeasReply(
+    [{ item: "ไข่", quantity: "6", unit: "ฟอง" }],
+    [
+      {
+        menu_name: "ไข่ดาว",
+        required_items: "ไข่",
+        optional_items: "",
+        style: "ทอด",
+        spicy_level: "mild",
+        difficulty: "easy",
+        time_minutes: "5",
+        preferred_for_house: "yes",
+        avoid_if: "",
+        note: "",
+      },
+      {
+        menu_name: "ข้าวไข่ดาวสองฟอง",
+        required_items: "ไข่",
+        optional_items: "ข้าวสวย",
+        style: "จานเดียว",
+        spicy_level: "mild",
+        difficulty: "easy",
+        time_minutes: "10",
+        preferred_for_house: "yes",
+        avoid_if: "",
+        note: "",
+      },
+    ],
+    normalizeHouseholdPreferences({
+      preferences: [
+        {
+          preference_type: "favorite",
+          keyword: "ข้าวไข่ดาวสองฟอง",
+          weight: "5",
+          enabled: "no",
+          note: "disabled on purpose",
+        },
+      ],
+    })
+  );
+
+  assert.equal(reply, "ลองทำเมนูพวกนี้ได้นะ:\n- ไข่ดาว\n- ข้าวไข่ดาวสองฟอง");
+});
