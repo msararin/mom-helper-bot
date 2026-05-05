@@ -3,13 +3,20 @@ import assert from "node:assert/strict";
 
 import {
   formatInventoryReply,
+  formatDateOnly,
   formatMenuIdeasReply,
   getUserModeKey,
   handleLineEvent,
+  KNOWN_UNITS,
   looksLikeCasualChat,
   normalizeInventoryList,
+  normalizeItemName,
+  normalizeUnit,
+  normalizeSpokenQuantity,
+  parseConcatenatedThaiItems,
   parseThaiItems,
   parseThaiNumberWords,
+  withDefaultPurchaseDate,
 } from "../src/index.js";
 
 class FakeKV {
@@ -96,8 +103,139 @@ test("parseThaiItems handles compact Thai number words and unit", () => {
   ]);
 });
 
+test("parseThaiItems normalizes kilogram aliases", () => {
+  assert.deepEqual(parseThaiItems("หมู 1 โล"), [
+    { item: "หมู", quantity: "1", unit: "กิโลกรัม" },
+  ]);
+
+  assert.deepEqual(parseThaiItems("แป้ง 2กก"), [
+    { item: "แป้ง", quantity: "2", unit: "กิโลกรัม" },
+  ]);
+});
+
+test("parseThaiItems supports household food units", () => {
+  assert.deepEqual(parseThaiItems("ปลากระป๋อง 3 กระป๋อง"), [
+    { item: "ปลากระป๋อง", quantity: "3", unit: "กระป๋อง" },
+  ]);
+
+  assert.deepEqual(parseThaiItems("นม 500มล"), [
+    { item: "นม", quantity: "500", unit: "มิลลิลิตร" },
+  ]);
+
+  assert.deepEqual(parseThaiItems("ขนม 1 แพ็ค"), [
+    { item: "ขนม", quantity: "1", unit: "แพ็ก" },
+  ]);
+
+  assert.deepEqual(parseThaiItems("ปลาทู 1 ตัว"), [
+    { item: "ปลาทู", quantity: "1", unit: "ตัว" },
+  ]);
+});
+
+test("parseThaiItems supports fractional quantity shorthand", () => {
+  assert.deepEqual(parseThaiItems("หมู ครึ่งโล"), [
+    { item: "หมู", quantity: "0.5", unit: "กิโลกรัม" },
+  ]);
+
+  assert.deepEqual(parseThaiItems("น้ำปลา ครึ่งขวด"), [
+    { item: "น้ำปลา", quantity: "0.5", unit: "ขวด" },
+  ]);
+});
+
+test("parseConcatenatedThaiItems handles speech-to-text style input without spaces", () => {
+  assert.deepEqual(
+    parseConcatenatedThaiItems("มีทูน่าหนึ่งถุงลูกชิ้นสองถุงฟักทองสามฝักฝรั่งสามโล"),
+    [
+      { item: "ทูน่า", quantity: "1", unit: "ถุง" },
+      { item: "ลูกชิ้น", quantity: "2", unit: "ถุง" },
+      { item: "ฟักทอง", quantity: "3", unit: "ฝัก" },
+      { item: "ฝรั่ง", quantity: "3", unit: "กิโลกรัม" },
+    ]
+  );
+});
+
+test("parseConcatenatedThaiItems strips speech noise and common misheard units", () => {
+  assert.deepEqual(
+    parseConcatenatedThaiItems("พิมพ์อ่านอ่านอ่านทูน่าหนึ่งถุงลูกชิ้นสองถุงฟักทองสามฝากฝรั่งสามโล"),
+    [
+      { item: "ทูน่า", quantity: "1", unit: "ถุง" },
+      { item: "ลูกชิ้น", quantity: "2", unit: "ถุง" },
+      { item: "ฟักทอง", quantity: "3", unit: "ฝัก" },
+      { item: "ฝรั่ง", quantity: "3", unit: "กิโลกรัม" },
+    ]
+  );
+});
+
 test("parseThaiNumberWords supports hundreds", () => {
   assert.equal(parseThaiNumberWords("สี่ร้อย"), "400");
+});
+
+test("unit dictionary normalizes kitchen unit aliases", () => {
+  assert.equal(normalizeUnit("โล"), "กิโลกรัม");
+  assert.equal(normalizeUnit("กก"), "กิโลกรัม");
+  assert.equal(normalizeUnit("แพ็ค"), "แพ็ก");
+  assert.equal(normalizeUnit("มล"), "มิลลิลิตร");
+  assert.ok(KNOWN_UNITS.includes("กระป๋อง"));
+  assert.ok(KNOWN_UNITS.includes("ตัว"));
+  assert.ok(KNOWN_UNITS.includes("หลอด"));
+  assert.ok(KNOWN_UNITS.includes("ช้อน"));
+});
+
+test("normalizeSpokenQuantity supports thai digits and speech words", () => {
+  assert.equal(normalizeSpokenQuantity("๓"), "3");
+  assert.equal(normalizeSpokenQuantity("ครึ่ง"), "0.5");
+  assert.equal(normalizeSpokenQuantity("สี่ร้อย"), "400");
+});
+
+test("normalizeItemName trims speech-to-text filler prefixes", () => {
+  assert.equal(normalizeItemName("พิมพ์อ่านอ่านอ่านทูน่า"), "ทูน่า");
+  assert.equal(normalizeItemName("มีนม"), "นม");
+  assert.equal(normalizeItemName("1.พิมพ์อ่านอ่านอ่านทูน่า"), "ทูน่า");
+  assert.equal(normalizeItemName("2.มีนม"), "นม");
+});
+
+test("withDefaultPurchaseDate fills purchase_date when missing", () => {
+  assert.deepEqual(
+    withDefaultPurchaseDate(
+      [{ item: "ไข่", quantity: "6", unit: "ฟอง" }],
+      new Date("2026-05-04T10:00:00Z")
+    ),
+    [
+      {
+        item: "ไข่",
+        quantity: "6",
+        unit: "ฟอง",
+        purchase_date: "2026-05-04",
+      },
+    ]
+  );
+});
+
+test("withDefaultPurchaseDate preserves existing purchase_date", () => {
+  assert.deepEqual(
+    withDefaultPurchaseDate(
+      [
+        {
+          item: "ไข่",
+          quantity: "6",
+          unit: "ฟอง",
+          purchase_date: "2026-05-01",
+        },
+      ],
+      new Date("2026-05-04T10:00:00Z")
+    ),
+    [
+      {
+        item: "ไข่",
+        quantity: "6",
+        unit: "ฟอง",
+        purchase_date: "2026-05-01",
+      },
+    ]
+  );
+});
+
+test("formatDateOnly returns yyyy-mm-dd", () => {
+  assert.equal(formatDateOnly(new Date("2026-05-04T10:00:00Z")), "2026-05-04");
 });
 
 test("looksLikeCasualChat rejects greetings as inventory", () => {
@@ -110,9 +248,9 @@ test("looksLikeCasualChat rejects greetings as inventory", () => {
 test("normalizeInventoryList accepts {items: []} payload", () => {
   assert.deepEqual(
     normalizeInventoryList({
-      items: [{ item: "ไข่", quantity: 6, unit: "ฟอง" }],
+      items: [{ item: "ไข่", quantity: 6, unit: "ฟอง", purchase_date: "2026-05-04" }],
     }),
-    [{ item: "ไข่", quantity: "6", unit: "ฟอง" }]
+    [{ item: "ไข่", quantity: "6", unit: "ฟอง", purchase_date: "2026-05-04" }]
   );
 });
 
@@ -178,7 +316,12 @@ test("valid add-item input saves to Apps Script and clears mode", async () => {
       const payload = JSON.parse(options.body);
       assert.equal(payload.userId, "U123");
       assert.deepEqual(payload.items, [
-        { item: "ไข่", quantity: "6", unit: "ฟอง" },
+        {
+          item: "ไข่",
+          quantity: "6",
+          unit: "ฟอง",
+          purchase_date: formatDateOnly(new Date()),
+        },
       ]);
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }

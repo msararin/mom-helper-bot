@@ -149,10 +149,12 @@ async function handleLineEvent(event, env) {
       return;
     }
 
+    const itemsToSave = withDefaultPurchaseDate(items);
+
     await saveItemsToAppsScript(env.GOOGLE_APPS_SCRIPT_URL, {
       userId,
       message,
-      items,
+      items: itemsToSave,
     });
     await clearUserMode(env.BOT_STATE, userId);
     await replyToLine(
@@ -228,11 +230,69 @@ function getUserModeKey(userId) {
   return `user:${userId}:mode`;
 }
 
+const UNIT_ALIASES = {
+  กก: "กิโลกรัม",
+  กิโล: "กิโลกรัม",
+  โล: "กิโลกรัม",
+  กิโลกรัม: "กิโลกรัม",
+  กรัม: "กรัม",
+  ขีด: "ขีด",
+  มล: "มิลลิลิตร",
+  มิลลิลิตร: "มิลลิลิตร",
+  ลิตร: "ลิตร",
+  ช้อนชา: "ช้อนชา",
+  ช้อนโต๊ะ: "ช้อนโต๊ะ",
+  ถ้วย: "ถ้วย",
+  แก้ว: "แก้ว",
+  ฟอง: "ฟอง",
+  ตัว: "ตัว",
+  ลูก: "ลูก",
+  ชิ้น: "ชิ้น",
+  แผ่น: "แผ่น",
+  ก้อน: "ก้อน",
+  ฝัก: "ฝัก",
+  ฝาก: "ฝัก",
+  หลอด: "หลอด",
+  ถ้วย: "ถ้วย",
+  ช้อน: "ช้อน",
+  ซีก: "ซีก",
+  กิ่ง: "กิ่ง",
+  กำ: "กำ",
+  ต้น: "ต้น",
+  หัว: "หัว",
+  ถุง: "ถุง",
+  ซอง: "ซอง",
+  ห่อ: "ห่อ",
+  แพ็ค: "แพ็ก",
+  แพ็ก: "แพ็ก",
+  กล่อง: "กล่อง",
+  กระป๋อง: "กระป๋อง",
+  ขวด: "ขวด",
+  โหล: "โหล",
+  ถาด: "ถาด",
+  แพ: "แพ",
+  ชุด: "ชุด",
+};
+
+const KNOWN_UNITS = Object.keys(UNIT_ALIASES).sort(
+  (left, right) => right.length - left.length
+);
+
+const SPEECH_NOISE_PREFIXES = ["พิมพ์", "อ่าน", "เอ่อ", "อ่า", "ช่วย", "ขอ", "มี"];
+const SORTED_SPEECH_NOISE_PREFIXES = [...SPEECH_NOISE_PREFIXES].sort(
+  (left, right) => right.length - left.length
+);
+
 function parseThaiItems(text) {
   const normalizedText = text.trim().replace(/\s+/g, " ");
 
   if (!normalizedText) {
     return [];
+  }
+
+  const concatenatedItems = parseConcatenatedThaiItems(normalizedText);
+  if (concatenatedItems.length > 0) {
+    return concatenatedItems;
   }
 
   const tokens = normalizedText.split(" ");
@@ -246,8 +306,17 @@ function parseThaiItems(text) {
     const compactQuantityUnit = parseCompactQuantityUnitToken(token);
 
     if (compactQuantityUnit && currentNameParts.length > 0) {
+      const normalizedItemName = normalizeItemName(
+        currentNameParts.join(" ").trim()
+      );
+      if (!normalizedItemName) {
+        currentNameParts = [];
+        index += 1;
+        continue;
+      }
+
       items.push({
-        item: currentNameParts.join(" ").trim(),
+        item: normalizedItemName,
         quantity: compactQuantityUnit.quantity,
         unit: compactQuantityUnit.unit,
       });
@@ -257,9 +326,9 @@ function parseThaiItems(text) {
     }
 
     if (isNumericToken(token)) {
-      const name = currentNameParts.join(" ").trim();
+      const name = normalizeItemName(currentNameParts.join(" ").trim());
       const quantity = normalizeQuantity(token);
-      const unit = nextToken && !isNumericToken(nextToken) ? nextToken : "";
+      const unit = normalizeUnit(nextToken || "");
 
       if (name) {
         items.push({
@@ -302,11 +371,16 @@ function parseThaiItems(text) {
     }
 
     if (currentNameParts.length > 0) {
-      items.push({
-        item: currentNameParts.join(" ").trim(),
-        quantity: "",
-        unit: "",
-      });
+      const normalizedItemName = normalizeItemName(
+        currentNameParts.join(" ").trim()
+      );
+      if (normalizedItemName) {
+        items.push({
+          item: normalizedItemName,
+          quantity: "",
+          unit: "",
+        });
+      }
       currentNameParts = [];
     }
 
@@ -315,11 +389,16 @@ function parseThaiItems(text) {
   }
 
   if (currentNameParts.length > 0) {
-    items.push({
-      item: currentNameParts.join(" ").trim(),
-      quantity: "",
-      unit: "",
-    });
+    const normalizedItemName = normalizeItemName(
+      currentNameParts.join(" ").trim()
+    );
+    if (normalizedItemName) {
+      items.push({
+        item: normalizedItemName,
+        quantity: "",
+        unit: "",
+      });
+    }
   }
 
   return items.filter((item) => item.item);
@@ -333,13 +412,145 @@ function normalizeQuantity(token) {
   return token.replace(",", ".");
 }
 
+function parseConcatenatedThaiItems(text) {
+  const normalizedText = text.replace(/\s+/g, "");
+  const cleanedText = normalizedText.replace(/^มี/, "");
+  const matches = findQuantityUnitMatches(cleanedText);
+
+  if (matches.length === 0) {
+    return [];
+  }
+
+  const items = [];
+  let cursor = 0;
+
+  for (const match of matches) {
+    const itemName = normalizeItemName(cleanedText.slice(cursor, match.index));
+    if (itemName) {
+      items.push({
+        item: itemName,
+        quantity: match.quantity,
+        unit: match.unit,
+      });
+    }
+    cursor = match.endIndex;
+  }
+
+  const trailingItem = normalizeItemName(cleanedText.slice(cursor));
+  if (trailingItem) {
+    items.push({
+      item: trailingItem,
+      quantity: "",
+      unit: "",
+    });
+  }
+
+  return items;
+}
+
+function findQuantityUnitMatches(text) {
+  const matches = [];
+
+  for (let index = 0; index < text.length; index += 1) {
+    const quantityMatch = findQuantityUnitAt(text, index);
+    if (!quantityMatch) {
+      continue;
+    }
+
+    matches.push(quantityMatch);
+    index = quantityMatch.endIndex - 1;
+  }
+
+  return matches;
+}
+
+function findQuantityUnitAt(text, index) {
+  let bestMatch = null;
+
+  for (let end = index + 1; end <= text.length; end += 1) {
+    const quantityText = text.slice(index, end);
+    const quantity = normalizeSpokenQuantity(quantityText);
+    if (!quantity) {
+      continue;
+    }
+
+    const unitMatch = findKnownUnitAt(text, end);
+    if (!unitMatch) {
+      continue;
+    }
+
+    bestMatch = {
+      index,
+      endIndex: end + unitMatch.length,
+      quantity,
+      unit: normalizeUnit(unitMatch),
+    };
+  }
+
+  return bestMatch;
+}
+
+function findKnownUnitAt(text, index) {
+  return KNOWN_UNITS.find((unit) => text.startsWith(unit, index)) || "";
+}
+
+function normalizeSpokenQuantity(rawQuantity) {
+  if (!rawQuantity) {
+    return "";
+  }
+
+  if (rawQuantity === "ครึ่ง") {
+    return "0.5";
+  }
+
+  const thaiDigits = rawQuantity.replace(/[๐-๙]/g, (digit) =>
+    String("๐๑๒๓๔๕๖๗๘๙".indexOf(digit))
+  );
+
+  if (/^[0-9]+(?:[.,][0-9]+)?$/.test(thaiDigits)) {
+    return normalizeQuantity(thaiDigits);
+  }
+
+  return parseThaiNumberWords(rawQuantity);
+}
+
+function normalizeItemName(itemName) {
+  let normalized = String(itemName || "").trim();
+
+  if (!normalized) {
+    return "";
+  }
+
+  normalized = normalized.replace(/^[\s\-•·–—]+/u, "").trim();
+  normalized = normalized.replace(/^[0-9๐-๙]+[.)\-:\s]*/u, "").trim();
+
+  const speechNoisePattern = new RegExp(
+    `^(?:${SORTED_SPEECH_NOISE_PREFIXES.map(escapeRegex).join("|")})+`,
+    "u"
+  );
+
+  normalized = normalized.replace(speechNoisePattern, "").trim();
+  normalized = normalized.replace(/^[\s\-•·–—]+/u, "").trim();
+
+  return normalized;
+}
+
+function escapeRegex(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function parseCompactQuantityUnitToken(token) {
   const arabicMatch = token.match(/^([0-9]+(?:[.,][0-9]+)?)(.+)$/);
-  if (arabicMatch) {
+  if (arabicMatch && isKnownUnit(arabicMatch[2])) {
     return {
       quantity: normalizeQuantity(arabicMatch[1]),
-      unit: arabicMatch[2],
+      unit: normalizeUnit(arabicMatch[2]),
     };
+  }
+
+  const fractionalMatch = parseFractionalQuantityUnitToken(token);
+  if (fractionalMatch) {
+    return fractionalMatch;
   }
 
   let bestMatch = null;
@@ -349,17 +560,33 @@ function parseCompactQuantityUnitToken(token) {
     const unitText = token.slice(splitIndex);
     const quantity = parseThaiNumberWords(quantityText);
 
-    if (!quantity || !unitText) {
+    if (!quantity || !unitText || !isKnownUnit(unitText)) {
       continue;
     }
 
     bestMatch = {
       quantity,
-      unit: unitText,
+      unit: normalizeUnit(unitText),
     };
   }
 
   return bestMatch;
+}
+
+function parseFractionalQuantityUnitToken(token) {
+  if (!token.startsWith("ครึ่ง")) {
+    return null;
+  }
+
+  const unitText = token.slice("ครึ่ง".length);
+  if (!isKnownUnit(unitText)) {
+    return null;
+  }
+
+  return {
+    quantity: "0.5",
+    unit: normalizeUnit(unitText),
+  };
 }
 
 function parseThaiNumberWords(text) {
@@ -466,6 +693,30 @@ function looksLikeCasualChat(message, items) {
   return casualPhrases.has(normalizedMessage);
 }
 
+function isKnownUnit(unit) {
+  return Boolean(normalizeUnit(unit));
+}
+
+function normalizeUnit(unit) {
+  const trimmedUnit = String(unit || "").trim();
+  return UNIT_ALIASES[trimmedUnit] || "";
+}
+
+function withDefaultPurchaseDate(items, now = new Date()) {
+  const purchaseDate = formatDateOnly(now);
+  return items.map((item) => ({
+    ...item,
+    purchase_date: item.purchase_date || purchaseDate,
+  }));
+}
+
+function formatDateOnly(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 async function saveItemsToAppsScript(url, payload) {
   if (!url) {
     throw new Error("GOOGLE_APPS_SCRIPT_URL is not set");
@@ -534,6 +785,7 @@ function normalizeInventoryItem(item) {
     item: String(item?.item || item?.name || "").trim(),
     quantity: String(item?.quantity || "").trim(),
     unit: String(item?.unit || "").trim(),
+    purchase_date: String(item?.purchase_date || "").trim(),
   };
 }
 
@@ -665,13 +917,21 @@ function createQuickReplyButton(label) {
 }
 
 export {
+  KNOWN_UNITS,
   handleLineEvent,
   parseThaiItems,
   parseThaiNumberWords,
   looksLikeCasualChat,
   normalizeInventoryList,
+  normalizeUnit,
+  normalizeSpokenQuantity,
+  normalizeItemName,
+  withDefaultPurchaseDate,
+  formatDateOnly,
   formatInventoryReply,
   formatMenuIdeasReply,
   suggestMenuIdeas,
   getUserModeKey,
+  parseConcatenatedThaiItems,
+  findQuantityUnitAt,
 };
