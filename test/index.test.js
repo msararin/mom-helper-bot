@@ -396,7 +396,7 @@ test("คิดเมนู suggests simple menus from inventory", async () => {
 
   assert.equal(
     getLastReplyText(calls),
-    "ลองทำเมนูพวกนี้ได้นะ:\n- ข้าวผัดง่ายๆ\n- ต้มจืดเต้าหู้"
+    "ลองทำเมนูพวกนี้ได้นะ:\n- ต้มจืดเต้าหู้หมูสับ\n- ไข่เจียวหมูสับ\n- เต้าหู้ผัดไข่"
   );
 });
 

@@ -825,39 +825,59 @@ function suggestMenuIdeas(items) {
   const names = items.map((item) => item.item.toLowerCase());
   const ideas = [];
 
-  if (hasAny(names, ["ไข่", "หมูสับ", "เนื้อบด", "ข้าว"])) {
-    ideas.push("ข้าวผัดง่ายๆ");
+  if (hasAny(names, ["เต้าหู้"]) && hasAny(names, ["หมูสับ", "เนื้อบด"])) {
+    ideas.push("ต้มจืดเต้าหู้หมูสับ");
   }
 
-  if (hasAny(names, ["ไข่"]) && hasAny(names, ["มะเขือเทศ", "ต้นหอม", "หอมใหญ่"])) {
-    ideas.push("ไข่เจียวใส่ผัก");
+  if (hasAny(names, ["ไข่"]) && hasAny(names, ["หมูสับ", "เนื้อบด"])) {
+    ideas.push("ไข่เจียวหมูสับ");
+  }
+
+  if (hasAny(names, ["เต้าหู้"]) && hasAny(names, ["ไข่"])) {
+    ideas.push("เต้าหู้ผัดไข่");
   }
 
   if (hasAny(names, ["หมูสับ", "เนื้อบด"]) && hasAny(names, ["กระเทียม", "พริก", "โหระพา"])) {
     ideas.push("ผัดกะเพรา");
   }
 
-  if (hasAny(names, ["เต้าหู้"]) && hasAny(names, ["ไข่", "ผักกาด", "คะน้า", "เห็ด"])) {
-    ideas.push("ต้มจืดเต้าหู้");
+  if (hasAny(names, ["ปลา", "ปลาทู"]) && hasAny(names, ["พริก", "หอมแดง", "มะนาว"])) {
+    ideas.push("น้ำพริกปลาทู");
   }
 
-  if (hasAny(names, ["คะน้า", "ผักคะน้า", "ผักกาด", "เห็ด"])) {
+  if (hasAny(names, ["ไข่"]) && hasAny(names, ["มะเขือเทศ", "ต้นหอม", "หอมใหญ่"])) {
+    ideas.push("ไข่เจียวใส่ผัก");
+  }
+
+  if (hasAny(names, ["คะน้า", "ผักคะน้า", "ผักกาด", "เห็ด", "ฟักทอง"])) {
     ideas.push("ผัดผักง่ายๆ");
+  }
+
+  if (hasAny(names, ["เต้าหู้"])) {
+    ideas.push("เต้าหู้ทอดกินกับข้าว");
+  }
+
+  if (hasAny(names, ["ไข่"])) {
+    ideas.push("ไข่เจียว");
   }
 
   if (ideas.length === 0) {
-    ideas.push("ไข่เจียว");
     ideas.push("ผัดผักง่ายๆ");
     ideas.push("ต้มจืดแบบบ้านๆ");
+    ideas.push("ข้าวผัดง่ายๆ");
   }
 
-  return ideas.slice(0, 3);
+  return uniqueIdeas(ideas).slice(0, 3);
 }
 
 function hasAny(names, keywords) {
   return keywords.some((keyword) =>
     names.some((name) => name.includes(keyword))
   );
+}
+
+function uniqueIdeas(ideas) {
+  return [...new Set(ideas)];
 }
 
 async function replyToLine(channelAccessToken, replyToken, text) {
@@ -934,4 +954,5 @@ export {
   getUserModeKey,
   parseConcatenatedThaiItems,
   findQuantityUnitAt,
+  uniqueIdeas,
 };
