@@ -1,105 +1,31 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import worker from "../src/index.js";
 import {
-  formatInventoryReply,
-  formatDateOnly,
-  formatMenuIdeasReply,
-  getUserModeKey,
-  handleLineEvent,
   KNOWN_UNITS,
+  containsInventoryItem,
+  findQuantityUnitAt,
+  formatDateOnly,
+  formatInventoryReply,
+  formatMenuIdeasReply,
   looksLikeCasualChat,
-  normalizeInventoryList,
   normalizeHouseholdPreferences,
-  normalizeMenuCatalog,
+  normalizeInventoryList,
   normalizeItemName,
-  normalizeUnit,
+  normalizeMenuCatalog,
   normalizeSpokenQuantity,
+  normalizeUnit,
   parseConcatenatedThaiItems,
   parseThaiItems,
   parseThaiNumberWords,
-  scoreMenuCandidate,
   scoreHouseholdPreferences,
+  scoreMenuCandidate,
+  splitCatalogList,
+  suggestMenuIdeas,
+  suggestMenuIdeasFromCatalog,
+  uniqueIdeas,
   withDefaultPurchaseDate,
-} from "../src/index.js";
-
-class FakeKV {
-  constructor(initialEntries = []) {
-    this.store = new Map(initialEntries);
-  }
-
-  async get(key) {
-    return this.store.has(key) ? this.store.get(key) : null;
-  }
-
-  async put(key, value) {
-    this.store.set(key, value);
-  }
-
-  async delete(key) {
-    this.store.delete(key);
-  }
-}
-
-function createLineEvent(message, userId = "U123") {
-  return {
-    type: "message",
-    replyToken: "reply-token",
-    source: { userId },
-    message: {
-      type: "text",
-      text: message,
-    },
-  };
-}
-
-function createEnv(botState = new FakeKV()) {
-  return {
-    LINE_CHANNEL_ACCESS_TOKEN: "token",
-    LINE_CHANNEL_SECRET: "secret",
-    GOOGLE_APPS_SCRIPT_URL: "https://example.com/apps-script",
-    ADMIN_API_TOKEN: "admin-secret",
-    BOT_STATE: botState,
-  };
-}
-
-function installFetchMock(handlers) {
-  const calls = [];
-  global.fetch = async (url, options = {}) => {
-    calls.push({ url, options });
-    return handlers(url, options, calls);
-  };
-  return calls;
-}
-
-function getLastReplyText(calls) {
-  const lineCall = calls.findLast((call) =>
-    String(call.url).includes("api.line.me/v2/bot/message/reply")
-  );
-  assert.ok(lineCall, "expected a LINE reply call");
-  const body = JSON.parse(lineCall.options.body);
-  return body.messages[0].text;
-}
-
-function getLastReplyBody(calls) {
-  const lineCall = calls.findLast((call) =>
-    String(call.url).includes("api.line.me/v2/bot/message/reply")
-  );
-  assert.ok(lineCall, "expected a LINE reply call");
-  return JSON.parse(lineCall.options.body);
-}
-
-function createAdminRequest(pathname, body, token = "admin-secret") {
-  return new Request(`https://example.com${pathname}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-admin-token": token,
-    },
-    body: JSON.stringify(body),
-  });
-}
+} from "../../src/index.js";
 
 test("parseThaiItems parses mixed inventory input", () => {
   assert.deepEqual(parseThaiItems("ไข่ 6 ฟอง นม 1 กล่อง ผักคะน้า"), [
@@ -379,278 +305,6 @@ test("scoreHouseholdPreferences boosts favorites and penalizes dislikes", () => 
   assert.equal(scoreHouseholdPreferences(menu, prefs), 2);
 });
 
-test("default message with no mode replies with main menu", async () => {
-  const env = createEnv();
-  const calls = installFetchMock(async (url) => {
-    if (String(url).includes("api.line.me")) {
-      return new Response("OK", { status: 200 });
-    }
-    throw new Error(`unexpected fetch ${url}`);
-  });
-
-  await handleLineEvent(createLineEvent("hi"), env);
-
-  const body = getLastReplyBody(calls);
-  assert.equal(body.messages[0].text, "ต้องการทำอะไร?");
-  assert.deepEqual(
-    body.messages[0].quickReply.items.map((item) => item.action.label),
-    ["เพิ่มของ", "คิดเมนู", "ดูของในตู้"]
-  );
-});
-
-test("เพิ่มของ sets mode and replies with add prompt", async () => {
-  const botState = new FakeKV();
-  const env = createEnv(botState);
-  const calls = installFetchMock(async (url) => {
-    if (String(url).includes("api.line.me")) {
-      return new Response("OK", { status: 200 });
-    }
-    throw new Error(`unexpected fetch ${url}`);
-  });
-
-  await handleLineEvent(createLineEvent("เพิ่มของ"), env);
-
-  assert.equal(await botState.get(getUserModeKey("U123")), "adding_item");
-  assert.equal(
-    getLastReplyText(calls),
-    "พิมพ์ของที่มีได้เลย เช่น ไข่ 6 ฟอง นม 1 กล่อง ผักคะน้า"
-  );
-});
-
-test("casual chat inside adding_item clears mode and shows main menu", async () => {
-  const botState = new FakeKV([[getUserModeKey("U123"), "adding_item"]]);
-  const env = createEnv(botState);
-  const calls = installFetchMock(async (url) => {
-    if (String(url).includes("api.line.me")) {
-      return new Response("OK", { status: 200 });
-    }
-    throw new Error(`unexpected fetch ${url}`);
-  });
-
-  await handleLineEvent(createLineEvent("ว่าไง"), env);
-
-  assert.equal(await botState.get(getUserModeKey("U123")), null);
-  assert.equal(getLastReplyText(calls), "ต้องการทำอะไร?");
-});
-
-test("valid add-item input saves to Apps Script and clears mode", async () => {
-  const botState = new FakeKV([[getUserModeKey("U123"), "adding_item"]]);
-  const env = createEnv(botState);
-  const calls = installFetchMock(async (url, options) => {
-    if (String(url).includes("example.com/apps-script")) {
-      const payload = JSON.parse(options.body);
-      assert.equal(payload.userId, "U123");
-      assert.deepEqual(payload.items, [
-        {
-          item: "ไข่",
-          quantity: "6",
-          unit: "ฟอง",
-          purchase_date: formatDateOnly(new Date()),
-        },
-      ]);
-      return new Response(JSON.stringify({ ok: true }), { status: 200 });
-    }
-
-    if (String(url).includes("api.line.me")) {
-      return new Response("OK", { status: 200 });
-    }
-
-    throw new Error(`unexpected fetch ${url}`);
-  });
-
-  await handleLineEvent(createLineEvent("ไข่ 6 ฟอง"), env);
-
-  assert.equal(await botState.get(getUserModeKey("U123")), null);
-  assert.equal(getLastReplyText(calls), "บันทึกให้แล้วนะ:\n- ไข่ 6 ฟอง");
-});
-
-test("ดูของในตู้ formats inventory from Apps Script", async () => {
-  const env = createEnv();
-  const calls = installFetchMock(async (url) => {
-    if (String(url).includes("example.com/apps-script")) {
-      return new Response(
-        JSON.stringify({
-          items: [
-            { item: "ไข่", quantity: "6", unit: "ฟอง" },
-            { item: "เต้าหู้", quantity: "1", unit: "ชิ้น" },
-          ],
-        }),
-        { status: 200 }
-      );
-    }
-
-    if (String(url).includes("api.line.me")) {
-      return new Response("OK", { status: 200 });
-    }
-
-    throw new Error(`unexpected fetch ${url}`);
-  });
-
-  await handleLineEvent(createLineEvent("ดูของในตู้"), env);
-
-  assert.equal(
-    getLastReplyText(calls),
-    "ตอนนี้มีของประมาณนี้นะ:\n- ไข่ 6 ฟอง\n- เต้าหู้ 1 ชิ้น"
-  );
-});
-
-test("คิดเมนู suggests menus from menu catalog before fallback rules", async () => {
-  const env = createEnv();
-  const calls = installFetchMock(async (url, options) => {
-    if (String(url).includes("example.com/apps-script")) {
-      const payload = JSON.parse(options.body);
-
-      if (payload.action === "menu_catalog") {
-        return new Response(
-          JSON.stringify({
-            menus: [
-              {
-                menu_name: "ต้มจืดเต้าหู้หมูสับ",
-                required_items: "เต้าหู้,เนื้อบด",
-                optional_items: "",
-                preferred_for_house: "yes",
-                difficulty: "easy",
-                time_minutes: "20",
-              },
-              {
-                menu_name: "ไข่เจียวหมูสับ",
-                required_items: "ไข่,เนื้อบด",
-                optional_items: "",
-                preferred_for_house: "yes",
-                difficulty: "easy",
-                time_minutes: "10",
-              },
-              {
-                menu_name: "เต้าหู้ผัดไข่",
-                required_items: "เต้าหู้,ไข่",
-                optional_items: "",
-                preferred_for_house: "yes",
-                difficulty: "easy",
-                time_minutes: "15",
-              },
-            ],
-          }),
-          { status: 200 }
-        );
-      }
-
-      if (payload.action === "household_preferences") {
-        return new Response(
-          JSON.stringify({
-            preferences: [
-              {
-                preference_type: "favorite",
-                keyword: "เต้าหู้ผัดไข่",
-                weight: "5",
-                enabled: "yes",
-              },
-            ],
-          }),
-          { status: 200 }
-        );
-      }
-
-      return new Response(
-        JSON.stringify({
-          items: [
-            { item: "ไข่", quantity: "6", unit: "ฟอง" },
-            { item: "เต้าหู้", quantity: "1", unit: "ชิ้น" },
-            { item: "เนื้อบด", quantity: "400", unit: "กรัม" },
-          ],
-        }),
-        { status: 200 }
-      );
-    }
-
-    if (String(url).includes("api.line.me")) {
-      return new Response("OK", { status: 200 });
-    }
-
-    throw new Error(`unexpected fetch ${url}`);
-  });
-
-  await handleLineEvent(createLineEvent("คิดเมนู"), env);
-
-  assert.equal(
-    getLastReplyText(calls),
-    "ลองทำเมนูพวกนี้ได้นะ:\n- เต้าหู้ผัดไข่\n- ไข่เจียวหมูสับ\n- ต้มจืดเต้าหู้หมูสับ"
-  );
-});
-
-test("admin fridge create-row merges duplicate item quantities", async () => {
-  const env = createEnv();
-  const calls = installFetchMock(async (url, options) => {
-    if (String(url).includes("example.com/apps-script")) {
-      const payload = JSON.parse(options.body);
-      assert.equal(payload.action, "sheet_admin_create_row");
-      assert.equal(payload.sheet, "Fridge");
-      assert.deepEqual(payload.row, {
-        item: "ไข่",
-        quantity: "2",
-        unit: "ฟอง",
-      });
-
-      return new Response(
-        JSON.stringify({
-          ok: true,
-          action: "sheet_admin_create_row",
-          sheet: "Fridge",
-          affected: 1,
-          mode: "merge",
-        }),
-        { status: 200 }
-      );
-    }
-
-    throw new Error(`unexpected fetch ${url}`);
-  });
-
-  const response = await worker.fetch(
-    createAdminRequest("/admin/sheets/create-row", {
-      sheet: "Fridge",
-      row: {
-        item: "ไข่",
-        quantity: "2",
-        unit: "ฟอง",
-      },
-    }),
-    env,
-    {}
-  );
-
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
-    ok: true,
-    action: "sheet_admin_create_row",
-    sheet: "Fridge",
-    affected: 1,
-    mode: "merge",
-  });
-  assert.equal(calls.length, 1);
-});
-
-test("admin routes reject invalid token", async () => {
-  const env = createEnv();
-
-  const response = await worker.fetch(
-    createAdminRequest(
-      "/admin/sheets/list",
-      {
-        sheet: "Fridge",
-      },
-      "wrong-token"
-    ),
-    env,
-    {}
-  );
-
-  assert.equal(response.status, 401);
-  assert.deepEqual(await response.json(), {
-    ok: false,
-    error: "Unauthorized",
-  });
-});
-
 test("format helpers keep user-facing Thai text stable", () => {
   assert.equal(formatInventoryReply([]), "ตอนนี้ยังไม่มีของในตู้เลย");
   assert.equal(
@@ -693,4 +347,31 @@ test("formatMenuIdeasReply still uses legacy fallback when Menu_Catalog is empty
   );
 
   assert.equal(reply, "ลองทำเมนูพวกนี้ได้นะ:\n- ไข่เจียว");
+});
+
+test("helper exports remain stable for menu logic modules", () => {
+  assert.deepEqual(splitCatalogList("ไข่, เต้าหู้"), ["ไข่", "เต้าหู้"]);
+  assert.equal(containsInventoryItem(["เต้าหู้ผัดไข่"], "เต้าหู้"), true);
+  assert.deepEqual(uniqueIdeas(["a", "b", "a"]), ["a", "b"]);
+  assert.equal(findQuantityUnitAt("ไข่6ฟอง", 3)?.unit, "ฟอง");
+  assert.deepEqual(
+    suggestMenuIdeasFromCatalog(
+      [{ item: "ไข่", quantity: "6", unit: "ฟอง" }],
+      [
+        {
+          menu_name: "ไข่ดาว",
+          required_items: "ไข่",
+          optional_items: "",
+          preferred_for_house: "yes",
+          difficulty: "easy",
+          time_minutes: "5",
+        },
+      ],
+      []
+    ),
+    ["ไข่ดาว"]
+  );
+  assert.deepEqual(suggestMenuIdeas([{ item: "ไข่", quantity: "6", unit: "ฟอง" }], [], []), [
+    "ไข่เจียว",
+  ]);
 });
