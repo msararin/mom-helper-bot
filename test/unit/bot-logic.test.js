@@ -28,6 +28,112 @@ import {
   withDefaultPurchaseDate,
 } from "../../src/index.js";
 
+const REALISTIC_MENU_CATALOG = [
+  {
+    menu_name: "เต้าหู้ผัดไข่",
+    required_items: "เต้าหู้,ไข่",
+    optional_items: "ต้นหอม,ซอสปรุงรส",
+    style: "ผัด",
+    spicy_level: "mild",
+    difficulty: "easy",
+    time_minutes: "15",
+    preferred_for_house: "yes",
+    avoid_if: "",
+    note: "ใช้วัตถุดิบน้อย",
+  },
+  {
+    menu_name: "ไข่ตุ๋น",
+    required_items: "ไข่",
+    optional_items: "ต้นหอม,ซีอิ๊วขาว",
+    style: "นึ่ง",
+    spicy_level: "mild",
+    difficulty: "easy",
+    time_minutes: "15",
+    preferred_for_house: "yes",
+    avoid_if: "",
+    note: "อ่อนท้อง",
+  },
+  {
+    menu_name: "ปลาทูทอด",
+    required_items: "ปลาทู",
+    optional_items: "น้ำปลา,น้ำมัน",
+    style: "ทอด",
+    spicy_level: "mild",
+    difficulty: "easy",
+    time_minutes: "15",
+    preferred_for_house: "yes",
+    avoid_if: "",
+    note: "กินกับข้าวสวย",
+  },
+  {
+    menu_name: "ผัดฟักทองใส่ไข่",
+    required_items: "ฟักทอง,ไข่",
+    optional_items: "กระเทียม,ต้นหอม",
+    style: "ผัด",
+    spicy_level: "mild",
+    difficulty: "easy",
+    time_minutes: "15",
+    preferred_for_house: "yes",
+    avoid_if: "",
+    note: "หวานธรรมชาติ",
+  },
+  {
+    menu_name: "ต้มจืดฟักทองไข่",
+    required_items: "ฟักทอง,ไข่",
+    optional_items: "ต้นหอม",
+    style: "เมนูน้ำ",
+    spicy_level: "mild",
+    difficulty: "easy",
+    time_minutes: "20",
+    preferred_for_house: "yes",
+    avoid_if: "",
+    note: "เบาๆ",
+  },
+  {
+    menu_name: "ข้าวไข่ดาวสองฟอง",
+    required_items: "ไข่",
+    optional_items: "ข้าวสวย,ซอสปรุงรส",
+    style: "จานเดียว",
+    spicy_level: "mild",
+    difficulty: "easy",
+    time_minutes: "10",
+    preferred_for_house: "yes",
+    avoid_if: "",
+    note: "เมนูโปรดของบ้าน",
+  },
+];
+
+const REALISTIC_PREFERENCES = [
+  {
+    preference_type: "favorite",
+    keyword: "ข้าวไข่ดาวสองฟอง",
+    weight: "5",
+    enabled: "yes",
+    note: "เมนูโปรด",
+  },
+  {
+    preference_type: "favorite",
+    keyword: "ไข่ตุ๋น",
+    weight: "4",
+    enabled: "yes",
+    note: "เมนูโปรด",
+  },
+  {
+    preference_type: "favorite",
+    keyword: "ปลาทูทอด",
+    weight: "4",
+    enabled: "yes",
+    note: "เมนูโปรด",
+  },
+  {
+    preference_type: "dislike",
+    keyword: "ของทอดหนัก",
+    weight: "3",
+    enabled: "yes",
+    note: "เบา ๆ หน่อย",
+  },
+];
+
 test("parseThaiItems parses mixed inventory input", () => {
   assert.deepEqual(parseThaiItems("ไข่ 6 ฟอง นม 1 กล่อง ผักคะน้า"), [
     { item: "ไข่", quantity: "6", unit: "ฟอง" },
@@ -423,4 +529,48 @@ test("helper exports remain stable for menu logic modules", () => {
   assert.deepEqual(suggestMenuIdeas([{ item: "ไข่", quantity: "6", unit: "ฟอง" }], [], []), [
     "ไข่เจียว",
   ]);
+});
+
+test("scenario: current fridge uses only Menu_Catalog and promotes household favorites", () => {
+  const reply = formatMenuIdeasReply(
+    [
+      { item: "ไข่", quantity: "6", unit: "ฟอง" },
+      { item: "เต้าหู้", quantity: "1", unit: "ชิ้น" },
+      { item: "ปลาทู", quantity: "1", unit: "ตัว" },
+      { item: "ฟักทอง", quantity: "1", unit: "ฝัก" },
+    ],
+    REALISTIC_MENU_CATALOG,
+    REALISTIC_PREFERENCES
+  );
+
+  assert.equal(
+    reply,
+    "ลองทำเมนูพวกนี้ได้นะ:\n- ข้าวไข่ดาวสองฟอง\n- ไข่ตุ๋น\n- ปลาทูทอด"
+  );
+});
+
+test("scenario: favorite valid catalog menu is promoted for simple egg inventory", () => {
+  const reply = formatMenuIdeasReply(
+    [{ item: "ไข่", quantity: "6", unit: "ฟอง" }],
+    REALISTIC_MENU_CATALOG,
+    REALISTIC_PREFERENCES
+  );
+
+  assert.equal(
+    reply,
+    "ลองทำเมนูพวกนี้ได้นะ:\n- ข้าวไข่ดาวสองฟอง\n- ไข่ตุ๋น"
+  );
+});
+
+test("scenario: preferences cannot introduce out-of-catalog favorite menu", () => {
+  const reply = formatMenuIdeasReply(
+    [{ item: "ปลาร้า", quantity: "1", unit: "ขวด" }],
+    REALISTIC_MENU_CATALOG,
+    REALISTIC_PREFERENCES
+  );
+
+  assert.equal(
+    reply,
+    "ตอนนี้ยังหาเมนูจากตารางที่ตรงของในตู้ไม่เจอ ลองเพิ่มเมนูใน Menu_Catalog หรือเพิ่มของในตู้ก่อนนะ"
+  );
 });
