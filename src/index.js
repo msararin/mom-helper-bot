@@ -1,5 +1,11 @@
 export default {
   async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    if (url.pathname.startsWith("/admin/")) {
+      return handleAdminRequest(request, env, url);
+    }
+
     if (request.method !== "POST") {
       return new Response("Mom Helper Bot is running", { status: 200 });
     }
@@ -41,6 +47,107 @@ export default {
     }
   },
 };
+
+const ALLOWED_ADMIN_SHEETS = new Set([
+  "Menu_Catalog",
+  "Fridge",
+  "Fridge_Log",
+  "Meal_Log",
+]);
+
+const ADMIN_ROUTE_ACTIONS = {
+  "/admin/sheets/list": "sheet_admin_list",
+  "/admin/sheets/create-row": "sheet_admin_create_row",
+  "/admin/sheets/update-row": "sheet_admin_update_row",
+  "/admin/sheets/delete-row": "sheet_admin_delete_row",
+  "/admin/sheets/dedupe": "sheet_admin_dedupe",
+};
+
+async function handleAdminRequest(request, env, url) {
+  if (request.method !== "POST") {
+    return jsonResponse(
+      {
+        ok: false,
+        error: "Method not allowed",
+      },
+      405
+    );
+  }
+
+  const action = ADMIN_ROUTE_ACTIONS[url.pathname];
+  if (!action) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: "Admin route not found",
+      },
+      404
+    );
+  }
+
+  if (!env.ADMIN_API_TOKEN) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: "ADMIN_API_TOKEN is not set",
+      },
+      500
+    );
+  }
+
+  const providedToken = getAdminTokenFromRequest(request);
+  if (providedToken !== env.ADMIN_API_TOKEN) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: "Unauthorized",
+      },
+      401
+    );
+  }
+
+  let payload;
+  try {
+    payload = await request.json();
+  } catch (error) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: "Invalid JSON body",
+      },
+      400
+    );
+  }
+
+  const validationError = validateAdminPayload(action, payload);
+  if (validationError) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: validationError,
+      },
+      400
+    );
+  }
+
+  try {
+    const response = await callAppsScript(env.GOOGLE_APPS_SCRIPT_URL, {
+      action,
+      ...payload,
+    });
+    return jsonResponse(response, 200);
+  } catch (error) {
+    console.error("Admin action failed:", error);
+    return jsonResponse(
+      {
+        ok: false,
+        error: "Admin action failed",
+        detail: error.message,
+      },
+      502
+    );
+  }
+}
 
 async function handleLineEvent(event, env) {
   if (event?.type !== "message") {
@@ -115,10 +222,13 @@ async function handleLineEvent(event, env) {
       const inventory = await fetchInventoryFromAppsScript(
         env.GOOGLE_APPS_SCRIPT_URL
       );
+      const menuCatalog = await fetchMenuCatalogFromAppsScript(
+        env.GOOGLE_APPS_SCRIPT_URL
+      );
       await replyToLine(
         env.LINE_CHANNEL_ACCESS_TOKEN,
         replyToken,
-        formatMenuIdeasReply(inventory)
+        formatMenuIdeasReply(inventory, menuCatalog)
       );
     } catch (error) {
       console.error("Menu suggestion fetch failed:", error);
@@ -230,6 +340,62 @@ function getUserModeKey(userId) {
   return `user:${userId}:mode`;
 }
 
+function getAdminTokenFromRequest(request) {
+  const authorization = request.headers.get("authorization") || "";
+  if (authorization.toLowerCase().startsWith("bearer ")) {
+    return authorization.slice(7).trim();
+  }
+
+  return request.headers.get("x-admin-token") || "";
+}
+
+function validateAdminPayload(action, payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return "Payload must be a JSON object";
+  }
+
+  const sheet = String(payload.sheet || "").trim();
+  if (!ALLOWED_ADMIN_SHEETS.has(sheet)) {
+    return "Sheet is not allowed";
+  }
+
+  if (action === "sheet_admin_list") {
+    return "";
+  }
+
+  if (action === "sheet_admin_create_row") {
+    return isPlainObject(payload.row) ? "" : "row is required";
+  }
+
+  if (action === "sheet_admin_update_row") {
+    if (!isPlainObject(payload.match)) {
+      return "match is required";
+    }
+
+    if (!isPlainObject(payload.updates)) {
+      return "updates is required";
+    }
+
+    return "";
+  }
+
+  if (action === "sheet_admin_delete_row") {
+    return isPlainObject(payload.match) ? "" : "match is required";
+  }
+
+  if (action === "sheet_admin_dedupe") {
+    return Array.isArray(payload.dedupe_by) && payload.dedupe_by.length > 0
+      ? ""
+      : "dedupe_by is required";
+  }
+
+  return "";
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 const UNIT_ALIASES = {
   กก: "กิโลกรัม",
   กิโล: "กิโลกรัม",
@@ -253,7 +419,6 @@ const UNIT_ALIASES = {
   ฝัก: "ฝัก",
   ฝาก: "ฝัก",
   หลอด: "หลอด",
-  ถ้วย: "ถ้วย",
   ช้อน: "ช้อน",
   ซีก: "ซีก",
   กิ่ง: "กิ่ง",
@@ -718,24 +883,24 @@ function formatDateOnly(date) {
 }
 
 async function saveItemsToAppsScript(url, payload) {
-  if (!url) {
-    throw new Error("GOOGLE_APPS_SCRIPT_URL is not set");
-  }
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Apps Script save failed with status ${response.status}`);
-  }
+  await callAppsScript(url, payload, "Apps Script save");
 }
 
 async function fetchInventoryFromAppsScript(url) {
+  const data = await callAppsScript(url, { action: "list" }, "Apps Script list");
+  return normalizeInventoryList(data);
+}
+
+async function fetchMenuCatalogFromAppsScript(url) {
+  const data = await callAppsScript(
+    url,
+    { action: "menu_catalog" },
+    "Apps Script menu catalog"
+  );
+  return normalizeMenuCatalog(data);
+}
+
+async function callAppsScript(url, payload, label = "Apps Script request") {
   if (!url) {
     throw new Error("GOOGLE_APPS_SCRIPT_URL is not set");
   }
@@ -746,12 +911,12 @@ async function fetchInventoryFromAppsScript(url) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      action: "list",
+      ...payload,
     }),
   });
 
   if (!response.ok) {
-    throw new Error(`Apps Script list failed with status ${response.status}`);
+    throw new Error(`${label} failed with status ${response.status}`);
   }
 
   const responseText = await response.text();
@@ -760,10 +925,19 @@ async function fetchInventoryFromAppsScript(url) {
   try {
     data = JSON.parse(responseText);
   } catch (error) {
-    throw new Error(`Apps Script list returned non-JSON: ${responseText}`);
+    throw new Error(`${label} returned non-JSON: ${responseText}`);
   }
 
-  return normalizeInventoryList(data);
+  return data;
+}
+
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+    },
+  });
 }
 
 function normalizeInventoryList(data) {
@@ -782,11 +956,36 @@ function normalizeInventoryList(data) {
 
 function normalizeInventoryItem(item) {
   return {
-    item: String(item?.item || item?.name || "").trim(),
+    item: normalizeItemName(String(item?.item || item?.name || "").trim()),
     quantity: String(item?.quantity || "").trim(),
     unit: String(item?.unit || "").trim(),
     purchase_date: String(item?.purchase_date || "").trim(),
   };
+}
+
+function normalizeMenuCatalog(data) {
+  const rawMenus = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.menus)
+      ? data.menus
+      : Array.isArray(data?.items)
+        ? data.items
+        : [];
+
+  return rawMenus
+    .map((menu) => ({
+      menu_name: String(menu?.menu_name || "").trim(),
+      required_items: String(menu?.required_items || "").trim(),
+      optional_items: String(menu?.optional_items || "").trim(),
+      style: String(menu?.style || "").trim(),
+      spicy_level: String(menu?.spicy_level || "").trim(),
+      difficulty: String(menu?.difficulty || "").trim(),
+      time_minutes: String(menu?.time_minutes || "").trim(),
+      preferred_for_house: String(menu?.preferred_for_house || "").trim(),
+      avoid_if: String(menu?.avoid_if || "").trim(),
+      note: String(menu?.note || "").trim(),
+    }))
+    .filter((menu) => menu.menu_name);
 }
 
 function formatSavedItemsReply(items) {
@@ -811,18 +1010,24 @@ function formatInventoryReply(items) {
   return `ตอนนี้มีของประมาณนี้นะ:\n${lines.join("\n")}`;
 }
 
-function formatMenuIdeasReply(items) {
+function formatMenuIdeasReply(items, menuCatalog = []) {
   if (items.length === 0) {
     return "ยังไม่มีของในตู้ เลยคิดเมนูให้ไม่ค่อยได้ ลองเพิ่มของก่อนนะ";
   }
 
-  const ideas = suggestMenuIdeas(items);
+  const ideas = suggestMenuIdeas(items, menuCatalog);
   const lines = ideas.map((idea) => `- ${idea}`);
   return `ลองทำเมนูพวกนี้ได้นะ:\n${lines.join("\n")}`;
 }
 
-function suggestMenuIdeas(items) {
+function suggestMenuIdeas(items, menuCatalog = []) {
   const names = items.map((item) => item.item.toLowerCase());
+  const catalogIdeas = suggestMenuIdeasFromCatalog(items, menuCatalog);
+
+  if (catalogIdeas.length > 0) {
+    return catalogIdeas;
+  }
+
   const ideas = [];
 
   if (hasAny(names, ["เต้าหู้"]) && hasAny(names, ["หมูสับ", "เนื้อบด"])) {
@@ -868,6 +1073,114 @@ function suggestMenuIdeas(items) {
   }
 
   return uniqueIdeas(ideas).slice(0, 3);
+}
+
+function suggestMenuIdeasFromCatalog(items, menuCatalog) {
+  if (!Array.isArray(menuCatalog) || menuCatalog.length === 0) {
+    return [];
+  }
+
+  const inventoryNames = items.map((item) => item.item.toLowerCase());
+  const scoredMenus = menuCatalog
+    .map((menu) => scoreMenuCandidate(menu, inventoryNames))
+    .filter((entry) => entry.score > 0)
+    .sort(compareScoredMenus);
+
+  return uniqueIdeas(
+    scoredMenus.slice(0, 3).map((entry) => entry.menu.menu_name)
+  );
+}
+
+function scoreMenuCandidate(menu, inventoryNames) {
+  const requiredItems = splitCatalogList(menu.required_items);
+  const optionalItems = splitCatalogList(menu.optional_items);
+
+  if (requiredItems.length === 0) {
+    return { menu, score: 0 };
+  }
+
+  const missingRequired = requiredItems.filter(
+    (requiredItem) => !containsInventoryItem(inventoryNames, requiredItem)
+  );
+
+  if (missingRequired.length > 0) {
+    return { menu, score: 0 };
+  }
+
+  const optionalMatches = optionalItems.filter((optionalItem) =>
+    containsInventoryItem(inventoryNames, optionalItem)
+  ).length;
+
+  let score = requiredItems.length * 10 + optionalMatches;
+
+  if (isAffirmativeFlag(menu.preferred_for_house)) {
+    score += 5;
+  }
+
+  if (String(menu.difficulty || "").toLowerCase() === "easy") {
+    score += 2;
+  }
+
+  const timeMinutes = parseTimeMinutes(menu.time_minutes);
+  if (timeMinutes > 0 && timeMinutes <= 15) {
+    score += 1;
+  }
+
+  return { menu, score };
+}
+
+function compareScoredMenus(left, right) {
+  if (right.score !== left.score) {
+    return right.score - left.score;
+  }
+
+  const leftPreferred = isAffirmativeFlag(left.menu.preferred_for_house) ? 1 : 0;
+  const rightPreferred = isAffirmativeFlag(right.menu.preferred_for_house) ? 1 : 0;
+  if (rightPreferred !== leftPreferred) {
+    return rightPreferred - leftPreferred;
+  }
+
+  const leftTime = parseTimeMinutes(left.menu.time_minutes);
+  const rightTime = parseTimeMinutes(right.menu.time_minutes);
+  if (leftTime !== rightTime) {
+    if (leftTime === Number.POSITIVE_INFINITY) {
+      return 1;
+    }
+    if (rightTime === Number.POSITIVE_INFINITY) {
+      return -1;
+    }
+    return leftTime - rightTime;
+  }
+
+  return String(left.menu.menu_name).localeCompare(String(right.menu.menu_name), "th");
+}
+
+function splitCatalogList(value) {
+  return String(value || "")
+    .split(",")
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function containsInventoryItem(inventoryNames, keyword) {
+  return inventoryNames.some((name) => name.includes(keyword));
+}
+
+function isAffirmativeFlag(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["yes", "y", "true", "1"].includes(normalized);
+}
+
+function parseTimeMinutes(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : Number.POSITIVE_INFINITY;
 }
 
 function hasAny(names, keywords) {
@@ -943,6 +1256,7 @@ export {
   parseThaiNumberWords,
   looksLikeCasualChat,
   normalizeInventoryList,
+  normalizeMenuCatalog,
   normalizeUnit,
   normalizeSpokenQuantity,
   normalizeItemName,
@@ -951,8 +1265,12 @@ export {
   formatInventoryReply,
   formatMenuIdeasReply,
   suggestMenuIdeas,
+  suggestMenuIdeasFromCatalog,
   getUserModeKey,
   parseConcatenatedThaiItems,
   findQuantityUnitAt,
   uniqueIdeas,
+  splitCatalogList,
+  containsInventoryItem,
+  scoreMenuCandidate,
 };

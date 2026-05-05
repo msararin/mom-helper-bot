@@ -4,7 +4,7 @@ compatibility_date = "2026-05-03"
 
 # Non-secret configuration belongs here.
 [vars]
-GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxUcbJDKAIgEQpkTaEogA9qjGdIUnrdOUOo_eNLMwHvTa74-TjgDaGFfZYlVbk0N5MpOQ/exec"
+GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwggOwpDoDZydi0au1iHoxeKBTqRjonWwyLpat35_P3bhycGL_TLHFIzQ6zeYaJcZwhmQ/exec"
 
 # Conversation state will be stored in KV.
 # Replace these placeholder IDs after creating the namespace:

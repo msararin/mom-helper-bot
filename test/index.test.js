@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import worker from "../src/index.js";
 import {
   formatInventoryReply,
   formatDateOnly,
@@ -10,12 +11,14 @@ import {
   KNOWN_UNITS,
   looksLikeCasualChat,
   normalizeInventoryList,
+  normalizeMenuCatalog,
   normalizeItemName,
   normalizeUnit,
   normalizeSpokenQuantity,
   parseConcatenatedThaiItems,
   parseThaiItems,
   parseThaiNumberWords,
+  scoreMenuCandidate,
   withDefaultPurchaseDate,
 } from "../src/index.js";
 
@@ -52,7 +55,9 @@ function createLineEvent(message, userId = "U123") {
 function createEnv(botState = new FakeKV()) {
   return {
     LINE_CHANNEL_ACCESS_TOKEN: "token",
+    LINE_CHANNEL_SECRET: "secret",
     GOOGLE_APPS_SCRIPT_URL: "https://example.com/apps-script",
+    ADMIN_API_TOKEN: "admin-secret",
     BOT_STATE: botState,
   };
 }
@@ -81,6 +86,17 @@ function getLastReplyBody(calls) {
   );
   assert.ok(lineCall, "expected a LINE reply call");
   return JSON.parse(lineCall.options.body);
+}
+
+function createAdminRequest(pathname, body, token = "admin-secret") {
+  return new Request(`https://example.com${pathname}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-admin-token": token,
+    },
+    body: JSON.stringify(body),
+  });
 }
 
 test("parseThaiItems parses mixed inventory input", () => {
@@ -248,9 +264,74 @@ test("looksLikeCasualChat rejects greetings as inventory", () => {
 test("normalizeInventoryList accepts {items: []} payload", () => {
   assert.deepEqual(
     normalizeInventoryList({
-      items: [{ item: "ไข่", quantity: 6, unit: "ฟอง", purchase_date: "2026-05-04" }],
+      items: [
+        { item: "ไข่", quantity: 6, unit: "ฟอง", purchase_date: "2026-05-04" },
+        { item: "- เต้าหู้", quantity: 1, unit: "ชิ้น", purchase_date: "2026-05-04" },
+      ],
     }),
-    [{ item: "ไข่", quantity: "6", unit: "ฟอง", purchase_date: "2026-05-04" }]
+    [
+      { item: "ไข่", quantity: "6", unit: "ฟอง", purchase_date: "2026-05-04" },
+      { item: "เต้าหู้", quantity: "1", unit: "ชิ้น", purchase_date: "2026-05-04" },
+    ]
+  );
+});
+
+test("normalizeMenuCatalog accepts {menus: []} payload", () => {
+  assert.deepEqual(
+    normalizeMenuCatalog({
+      menus: [
+        {
+          menu_name: "ต้มจืดเต้าหู้หมูสับ",
+          required_items: "เต้าหู้,หมูสับ",
+          optional_items: "ต้นหอม",
+          preferred_for_house: "yes",
+          difficulty: "easy",
+        },
+      ],
+    }),
+    [
+      {
+        menu_name: "ต้มจืดเต้าหู้หมูสับ",
+        required_items: "เต้าหู้,หมูสับ",
+        optional_items: "ต้นหอม",
+        style: "",
+        spicy_level: "",
+        difficulty: "easy",
+        time_minutes: "",
+        preferred_for_house: "yes",
+        avoid_if: "",
+        note: "",
+      },
+    ]
+  );
+});
+
+test("scoreMenuCandidate prefers household-friendly quick menus on ties", () => {
+  const inventoryNames = ["ไข่", "เต้าหู้"];
+
+  assert.ok(
+    scoreMenuCandidate(
+      {
+        menu_name: "เต้าหู้ผัดไข่",
+        required_items: "เต้าหู้,ไข่",
+        optional_items: "",
+        preferred_for_house: "yes",
+        difficulty: "easy",
+        time_minutes: "15",
+      },
+      inventoryNames
+    ).score >
+      scoreMenuCandidate(
+        {
+          menu_name: "ไข่กับเต้าหู้แบบทั่วไป",
+          required_items: "เต้าหู้,ไข่",
+          optional_items: "",
+          preferred_for_house: "",
+          difficulty: "medium",
+          time_minutes: "25",
+        },
+        inventoryNames
+      ).score
   );
 });
 
@@ -369,10 +450,46 @@ test("ดูของในตู้ formats inventory from Apps Script", async 
   );
 });
 
-test("คิดเมนู suggests simple menus from inventory", async () => {
+test("คิดเมนู suggests menus from menu catalog before fallback rules", async () => {
   const env = createEnv();
-  const calls = installFetchMock(async (url) => {
+  const calls = installFetchMock(async (url, options) => {
     if (String(url).includes("example.com/apps-script")) {
+      const payload = JSON.parse(options.body);
+
+      if (payload.action === "menu_catalog") {
+        return new Response(
+          JSON.stringify({
+            menus: [
+              {
+                menu_name: "ต้มจืดเต้าหู้หมูสับ",
+                required_items: "เต้าหู้,เนื้อบด",
+                optional_items: "",
+                preferred_for_house: "yes",
+                difficulty: "easy",
+                time_minutes: "20",
+              },
+              {
+                menu_name: "ไข่เจียวหมูสับ",
+                required_items: "ไข่,เนื้อบด",
+                optional_items: "",
+                preferred_for_house: "yes",
+                difficulty: "easy",
+                time_minutes: "10",
+              },
+              {
+                menu_name: "เต้าหู้ผัดไข่",
+                required_items: "เต้าหู้,ไข่",
+                optional_items: "",
+                preferred_for_house: "yes",
+                difficulty: "easy",
+                time_minutes: "15",
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+
       return new Response(
         JSON.stringify({
           items: [
@@ -396,8 +513,82 @@ test("คิดเมนู suggests simple menus from inventory", async () => {
 
   assert.equal(
     getLastReplyText(calls),
-    "ลองทำเมนูพวกนี้ได้นะ:\n- ต้มจืดเต้าหู้หมูสับ\n- ไข่เจียวหมูสับ\n- เต้าหู้ผัดไข่"
+    "ลองทำเมนูพวกนี้ได้นะ:\n- ไข่เจียวหมูสับ\n- เต้าหู้ผัดไข่\n- ต้มจืดเต้าหู้หมูสับ"
   );
+});
+
+test("admin fridge create-row merges duplicate item quantities", async () => {
+  const env = createEnv();
+  const calls = installFetchMock(async (url, options) => {
+    if (String(url).includes("example.com/apps-script")) {
+      const payload = JSON.parse(options.body);
+      assert.equal(payload.action, "sheet_admin_create_row");
+      assert.equal(payload.sheet, "Fridge");
+      assert.deepEqual(payload.row, {
+        item: "ไข่",
+        quantity: "2",
+        unit: "ฟอง",
+      });
+
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          action: "sheet_admin_create_row",
+          sheet: "Fridge",
+          affected: 1,
+          mode: "merge",
+        }),
+        { status: 200 }
+      );
+    }
+
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  const response = await worker.fetch(
+    createAdminRequest("/admin/sheets/create-row", {
+      sheet: "Fridge",
+      row: {
+        item: "ไข่",
+        quantity: "2",
+        unit: "ฟอง",
+      },
+    }),
+    env,
+    {}
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    ok: true,
+    action: "sheet_admin_create_row",
+    sheet: "Fridge",
+    affected: 1,
+    mode: "merge",
+  });
+  assert.equal(calls.length, 1);
+});
+
+test("admin routes reject invalid token", async () => {
+  const env = createEnv();
+
+  const response = await worker.fetch(
+    createAdminRequest(
+      "/admin/sheets/list",
+      {
+        sheet: "Fridge",
+      },
+      "wrong-token"
+    ),
+    env,
+    {}
+  );
+
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), {
+    ok: false,
+    error: "Unauthorized",
+  });
 });
 
 test("format helpers keep user-facing Thai text stable", () => {
