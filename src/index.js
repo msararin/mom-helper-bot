@@ -14,6 +14,7 @@ import {
   normalizeHouseholdPreferences,
   normalizeInventoryList,
   normalizeMenuCatalog,
+  scorePreferenceMatch,
   scoreHouseholdPreferences,
   scoreMenuCandidate,
   splitCatalogList,
@@ -475,6 +476,7 @@ export {
   uniqueIdeas,
   splitCatalogList,
   containsInventoryItem,
+  scorePreferenceMatch,
   scoreMenuCandidate,
   scoreHouseholdPreferences,
 };

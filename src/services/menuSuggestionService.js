@@ -294,8 +294,8 @@ function scoreHouseholdPreferences(menu, householdPreferences) {
     return 0;
   }
 
-  const haystack = [
-    menu.menu_name,
+  const menuName = String(menu.menu_name || "").trim().toLowerCase();
+  const supportingText = [
     menu.required_items,
     menu.optional_items,
     menu.style,
@@ -307,23 +307,45 @@ function scoreHouseholdPreferences(menu, householdPreferences) {
 
   return householdPreferences.reduce((score, preference) => {
     const keyword = String(preference.keyword || "").trim().toLowerCase();
-    if (!keyword || !haystack.includes(keyword)) {
+    const matchScore = scorePreferenceMatch(keyword, menuName, supportingText);
+    if (!keyword || matchScore === 0) {
       return score;
     }
 
     const type = String(preference.preference_type || "").trim().toLowerCase();
     const weight = parsePreferenceWeight(preference.weight);
+    const adjustedWeight = weight * matchScore;
 
     if (["favorite", "prefer", "like"].includes(type)) {
-      return score + weight;
+      return score + adjustedWeight;
     }
 
     if (["dislike", "avoid", "no"].includes(type)) {
-      return score - weight;
+      return score - adjustedWeight;
     }
 
     return score;
   }, 0);
+}
+
+function scorePreferenceMatch(keyword, menuName, supportingText) {
+  if (!keyword) {
+    return 0;
+  }
+
+  if (menuName === keyword) {
+    return 3;
+  }
+
+  if (menuName.includes(keyword)) {
+    return 2;
+  }
+
+  if (supportingText.includes(keyword)) {
+    return 1;
+  }
+
+  return 0;
 }
 
 function parsePreferenceWeight(value) {
@@ -355,6 +377,7 @@ export {
   normalizeInventoryList,
   normalizeMenuCatalog,
   parsePreferenceWeight,
+  scorePreferenceMatch,
   scoreHouseholdPreferences,
   scoreMenuCandidate,
   splitCatalogList,

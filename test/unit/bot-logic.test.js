@@ -18,6 +18,7 @@ import {
   parseConcatenatedThaiItems,
   parseThaiItems,
   parseThaiNumberWords,
+  scorePreferenceMatch,
   scoreHouseholdPreferences,
   scoreMenuCandidate,
   splitCatalogList,
@@ -287,6 +288,13 @@ test("scoreMenuCandidate prefers household-friendly quick menus on ties", () => 
   );
 });
 
+test("scorePreferenceMatch favors exact menu name over supporting text", () => {
+  assert.equal(scorePreferenceMatch("ไข่ตุ๋น", "ไข่ตุ๋น", "ไข่ นึ่ง"), 3);
+  assert.equal(scorePreferenceMatch("ไข่", "ไข่ตุ๋น", "นึ่ง"), 2);
+  assert.equal(scorePreferenceMatch("นึ่ง", "ไข่ตุ๋น", "นึ่ง เมนูเบาๆ"), 1);
+  assert.equal(scorePreferenceMatch("ตำปลาร้า", "ไข่ตุ๋น", "ไข่ นึ่ง"), 0);
+});
+
 test("scoreHouseholdPreferences boosts favorites and penalizes dislikes", () => {
   const menu = {
     menu_name: "ต้มจืดเต้าหู้หมูสับ",
@@ -302,7 +310,48 @@ test("scoreHouseholdPreferences boosts favorites and penalizes dislikes", () => 
     { preference_type: "dislike", keyword: "หมูสับ", weight: "2" },
   ];
 
-  assert.equal(scoreHouseholdPreferences(menu, prefs), 2);
+  assert.equal(scoreHouseholdPreferences(menu, prefs), 4);
+});
+
+test("scoreMenuCandidate lets exact favorite menu outrank a generic tie", () => {
+  const inventoryNames = ["ไข่"];
+  const prefs = [
+    { preference_type: "favorite", keyword: "ข้าวไข่ดาวสองฟอง", weight: "5" },
+  ];
+
+  const favoriteScore = scoreMenuCandidate(
+    {
+      menu_name: "ข้าวไข่ดาวสองฟอง",
+      required_items: "ไข่",
+      optional_items: "",
+      preferred_for_house: "",
+      difficulty: "easy",
+      time_minutes: "10",
+      style: "จานเดียว",
+      spicy_level: "mild",
+      note: "",
+    },
+    inventoryNames,
+    prefs
+  ).score;
+
+  const genericScore = scoreMenuCandidate(
+    {
+      menu_name: "ไข่ดาว",
+      required_items: "ไข่",
+      optional_items: "",
+      preferred_for_house: "",
+      difficulty: "easy",
+      time_minutes: "10",
+      style: "ทอด",
+      spicy_level: "mild",
+      note: "",
+    },
+    inventoryNames,
+    prefs
+  ).score;
+
+  assert.ok(favoriteScore > genericScore);
 });
 
 test("format helpers keep user-facing Thai text stable", () => {
